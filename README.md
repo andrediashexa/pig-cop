@@ -35,7 +35,7 @@ segredos **já com o escape correto**, builda, sobe e oferece importar o
 Modo desatendido:
 
 ```bash
-sudo ./install.sh -y --asn 264999 --password 'SenhaForte' \
+sudo ./install.sh -y --asn 65000 --password 'SenhaForte' \
      --protected 203.0.113.0/24,198.51.100.0/22 --import
 ```
 

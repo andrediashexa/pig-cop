@@ -70,7 +70,7 @@ Opções:
 
 Exemplos:
   sudo ./install.sh
-  sudo ./install.sh -y --asn 264999 --password 'Senha!Forte' \
+  sudo ./install.sh -y --asn 65000 --password 'Senha!Forte' \
        --protected 203.0.113.0/24,198.51.100.0/22 --import
 EOF
 }
