@@ -21,11 +21,59 @@ comandam CPEs zumbis para disparar ataques. O cliente aponta esses prefixos para
 
 ---
 
+## Instalação em uma linha
+
+```bash
+git clone https://github.com/andrediashexa/pig-cop.git /opt/pigcop
+cd /opt/pigcop && sudo ./install.sh
+```
+
+O `install.sh` instala o Docker se faltar, pergunta o ASN e a senha, gera os
+segredos **já com o escape correto**, builda, sobe e oferece importar o
+`rotas.rsc`. É idempotente — rodar de novo não rotaciona nada.
+
+Modo desatendido:
+
+```bash
+sudo ./install.sh -y --asn 264999 --password 'SenhaForte' \
+     --protected 203.0.113.0/24,198.51.100.0/22 --import
+```
+
+<details>
+<summary>Todas as opções do <code>install.sh</code></summary>
+
+| Flag | O quê |
+|---|---|
+| `--user USUARIO` | usuário do login web (padrão `hexanetworks`) |
+| `--password SENHA` | senha. Omitido: pergunta, ou gera aleatória em `-y` |
+| `--asn NUMERO` | **ASN local — obrigatório** |
+| `--router-id IP` | router-id BGP (padrão: IP principal do host, detectado) |
+| `--next-hop IP` | next-hop de descarte (padrão `192.0.2.1`) |
+| `--communities CSV` | communities padrão (padrão `65535:666`) |
+| `--protected CSV` | prefixos que nunca podem ser anunciados |
+| `--web-port PORTA` | porta da interface (padrão `5173`) |
+| `--import` / `--no-import` | importa ou não o `rotas.rsc` no final |
+| `-y`, `--non-interactive` | não pergunta nada |
+| `--skip-docker` | não mexe no Docker |
+| `--force-env` | regera o `.env` — **rotaciona os segredos** |
+
+O que ele faz, em ordem: valida o ambiente → instala `curl`/`iproute2`/Docker →
+checa se as portas 179, 5173, 4000 e 50051 estão livres (reconhece as do próprio
+PIG-COP e reaproveita) → gera hash bcrypt cost 12 e `JWT_SECRET` de 32 bytes →
+escreve o `.env` com `chmod 600` → builda → sobe → espera o `/api/health`
+responder → importa a base → imprime as credenciais e as regras de firewall que
+faltam.
+
+</details>
+
+---
+
 ## Índice
 
 - [O que é isso](#o-que-é-isso)
 - [Arquitetura](#arquitetura)
-- [Instalação](#instalação)
+- [Instalação em uma linha](#instalação-em-uma-linha)
+- [Instalação manual](#instalação-manual)
 - [Como funciona](#como-funciona)
   - [O RIB é volátil — e por que isso importa](#o-rib-é-volátil--e-por-que-isso-importa)
   - [Injeção em massa](#injeção-em-massa)
@@ -139,7 +187,10 @@ flowchart TB
 
 ---
 
-## Instalação
+## Instalação manual
+
+> Se você usou o `install.sh` acima, pule esta seção — ela existe para quem
+> quer entender ou controlar cada passo.
 
 ### Pré-requisitos
 
