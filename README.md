@@ -164,15 +164,15 @@ cp .env.example .env
 A saída é algo assim:
 
 ```
-ADMIN_PASSWORD_HASH=$2b$12$EXEMPLO...
-JWT_SECRET=EXEMPLO...
+ADMIN_PASSWORD_HASH=$2b$12$EXEMPLOEXEMPLOEXEMPLOexemploexemploexemploexemploexe
+JWT_SECRET=0000exemplo0000exemplo0000exemplo0000exemplo0000exemplo0000exem
 ```
 
 > [!WARNING]
 > **Escape cada `$` do hash como `$$` ao colar no `.env`.**
 > O Docker Compose interpola `$VAR` dentro do `.env` — sem escapar, o hash bcrypt
 > chega truncado no container e o login falha sem erro claro.
-> `$2b$12$sICc...` vira `$$2b$$12$$sICc...`
+> `$2b$12$abc...` vira `$$2b$$12$$abc...`
 
 ```bash
 nano .env          # cole o hash escapado + o JWT_SECRET
