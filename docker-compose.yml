@@ -1,0 +1,72 @@
+services:
+  gobgpd:
+    build:
+      context: ./gobgpd
+      args:
+        GOBGP_VERSION: ${GOBGP_VERSION:-v4.7.0}
+    image: pigcop/gobgpd:${GOBGP_VERSION:-v4.7.0}
+    container_name: pigcop-gobgpd
+    restart: unless-stopped
+    # BGP precisa enxergar o IP real do peer: com bridge/ports o docker-proxy
+    # mascara a origem e a sessao nao casa com o neighbor-address configurado.
+    network_mode: host
+    cap_add:
+      - NET_BIND_SERVICE
+    environment:
+      GRPC_LISTEN: ${GRPC_LISTEN:-127.0.0.1:50051}
+      LOG_LEVEL: ${GOBGP_LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "gobgp", "--host", "127.0.0.1", "global"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  backend:
+    build: ./backend
+    image: pigcop/backend:${APP_VERSION:-0.1.0}
+    container_name: pigcop-backend
+    restart: unless-stopped
+    # Host network para alcançar o gRPC do gobgpd em 127.0.0.1:50051 sem
+    # expor essa porta na rede. O uvicorn escuta apenas em 127.0.0.1:4000.
+    network_mode: host
+    environment:
+      GOBGP_GRPC: ${GRPC_LISTEN:-127.0.0.1:50051}
+      BIND_HOST: 127.0.0.1
+      BIND_PORT: "4000"
+      DB_PATH: /data/controller.db
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env}
+      ADMIN_USER: ${ADMIN_USER:?defina ADMIN_USER no .env}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:?defina ADMIN_PASSWORD_HASH no .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      LOCAL_ASN: ${LOCAL_ASN:?defina LOCAL_ASN no .env}
+      ROUTER_ID: ${ROUTER_ID:?defina ROUTER_ID no .env}
+      BGP_LISTEN_PORT: ${BGP_LISTEN_PORT:-179}
+      DEFAULT_NEXT_HOP: ${DEFAULT_NEXT_HOP:-192.0.2.1}
+      DEFAULT_COMMUNITIES: ${DEFAULT_COMMUNITIES:-65535:666}
+      PROTECTED_PREFIXES: ${PROTECTED_PREFIXES:-}
+      MAX_ROUTES: ${MAX_ROUTES:-50000}
+      MIN_PREFIX_LEN_V4: ${MIN_PREFIX_LEN_V4:-24}
+      RECONCILE_INTERVAL: ${RECONCILE_INTERVAL:-60}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+    volumes:
+      - ./data:/data
+    depends_on:
+      - gobgpd
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_APP_VERSION: ${APP_VERSION:-0.1.0}
+    image: pigcop/frontend:${APP_VERSION:-0.1.0}
+    container_name: pigcop-frontend
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      NEXT_BACKEND_INTERNAL: http://127.0.0.1:4000
+      NEXT_PUBLIC_API_BASE_URL: /api
+      NEXT_PUBLIC_APP_VERSION: ${APP_VERSION:-0.1.0}
+      PORT: ${WEB_PORT:-5173}
+    depends_on:
+      - backend

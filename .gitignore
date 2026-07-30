@@ -1,0 +1,18 @@
+# segredos e estado
+.env
+.env.local
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/app/gen/
+
+# node / next
+node_modules/
+.next/
+npm-debug.log*

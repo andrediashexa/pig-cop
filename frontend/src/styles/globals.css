@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --muted: 210 20% 96%;
+  --muted-foreground: 215 16% 47%;
+  --border: 214 20% 91%;
+  --input: 214 20% 91%;
+  --primary: 120 60% 45%;
+  --primary-foreground: 0 0% 100%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --ring: 120 60% 45%;
+  --radius: 8px;
+}
+
+.dark {
+  --background: 222 47% 4%;
+  --foreground: 210 20% 96%;
+  --card: 222 35% 9%;
+  --card-foreground: 210 20% 96%;
+  --muted: 217 33% 14%;
+  --muted-foreground: 215 16% 62%;
+  --border: 217 33% 19%;
+  --input: 217 33% 19%;
+  --primary: 120 60% 50%;
+  --primary-foreground: 120 30% 6%;
+  --destructive: 0 70% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --ring: 120 60% 50%;
+}
+
+body {
+  font-feature-settings: 'cv02', 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.titanium-gradient {
+  background:
+    radial-gradient(ellipse at 0% 0%, hsl(var(--primary) / 0.08) 0%, transparent 55%),
+    radial-gradient(ellipse at 100% 100%, hsl(var(--primary) / 0.06) 0%, transparent 50%),
+    hsl(var(--card));
+}
+.dark .titanium-gradient {
+  background:
+    radial-gradient(ellipse at 0% 0%, hsl(var(--primary) / 0.06) 0%, transparent 55%),
+    radial-gradient(ellipse at 100% 100%, hsl(var(--primary) / 0.04) 0%, transparent 50%),
+    hsl(var(--card));
+}
+
+.hexa-titanium-text {
+  background: linear-gradient(180deg,
+    hsl(var(--foreground)) 0%, hsl(var(--foreground)) 45%, hsl(var(--muted-foreground)) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.titanium-edge {
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.04), inset 0 -1px 0 hsl(0 0% 0% / 0.18);
+}
+
+.scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }
+.scrollbar-thin::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.4); }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
