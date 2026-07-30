@@ -1,8 +1,5 @@
-# 2026-02-02 17:28:35 by RouterOS 7.20.8
-# software id = REMOVIDO
-#
-# model = REMOVIDO
-# serial number = REMOVIDO
+# Lista de controladores C2 de botnets para blackhole via BGP (PIG-COP).
+# Exportado de /ip firewall address-list do RouterOS.
 /ip firewall address-list
 add address=1.116.73.99 comment="block-attack-PANDA C2" list=BLOCK-BGP
 add address=1.15.116.27 comment=block-attack-BurpSuite list=BLOCK-BGP

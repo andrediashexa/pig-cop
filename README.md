@@ -301,7 +301,7 @@ iptables -A INPUT -p tcp --dport 179 -s 200.100.50.1 -j ACCEPT
 iptables -A INPUT -p tcp --dport 179 -j DROP
 
 # interface web só da rede de gerência
-iptables -A INPUT -p tcp --dport 5173 -s 10.95.200.0/24 -j ACCEPT
+iptables -A INPUT -p tcp --dport 5173 -s 198.51.100.0/24 -j ACCEPT
 iptables -A INPUT -p tcp --dport 5173 -j DROP
 ```
 
