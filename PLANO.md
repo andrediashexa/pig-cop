@@ -4,7 +4,7 @@
 > descrito no `README.md`. As divergencias entre o plano e a implementacao final
 > estao anotadas em §17.
 
-> Controlador de GoBGP com UI web no padrão **Hexanium** (`guia-de-interface-interno`).
+> Controlador de GoBGP com UI web no design system interno da Hexa.
 > Fecha sessões BGP com clientes e anuncia alguns milhares de prefixos de bloqueio.
 > **Tudo em Docker via `docker compose`.**
 
@@ -81,7 +81,7 @@ fixture com os 3 formatos + continuação.
 | gRPC | stubs gerados no `docker build` (`grpcio-tools` sobre `api/*.proto` do GoBGP) | Sem stubs versionados no repo desatualizando. |
 | DB | **SQLite** (volume `./data`) + WAL | 7.7k linhas → sobra. Zero operação. Migração para Postgres é trivial se crescer. |
 | Auth | JWT HS256 em **cookie httpOnly + SameSite=Strict**, hash **bcrypt** da senha | Sem token em localStorage (XSS). |
-| Frontend | **Next.js 15 + React 18 + Tailwind + shadcn/ui** conforme `guia-de-interface-interno` | Mesma cara do Hexanium. |
+| Frontend | **Next.js 15 + React 18 + Tailwind + shadcn/ui** | Mesma cara dos outros sistemas internos. |
 | Tabela grande | **@tanstack/react-virtual** | 7.7k+ linhas sem travar o browser. |
 | Orquestração | **docker compose** (3 serviços) | Requisito. |
 
@@ -95,7 +95,6 @@ fixture com os 3 formatos + continuação.
 ├── .env                          # segredos (JWT_SECRET, ADMIN_PASSWORD_HASH, ASN…) — gitignored
 ├── .env.example
 ├── rotas.rsc                     # insumo (import inicial)
-├── guia-de-interface-interno
 ├── PLANO.md
 ├── README.md                     # runbook: subir, firewall, backup, troubleshooting
 │
@@ -125,7 +124,7 @@ fixture com os 3 formatos + continuação.
 │       ├── importer.py           # parse_rsc() + normalização + validação
 │       └── tests/                # pytest: parser, validador, encode, reconcile
 │
-└── frontend/                     # padrão Hexanium (§2 do guia-de-interface-interno)
+└── frontend/                     # design system interno
     ├── Dockerfile · next.config.js · tailwind.config.js · postcss.config.js
     ├── app/{layout.jsx,page.jsx}
     └── src/

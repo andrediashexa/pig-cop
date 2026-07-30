@@ -638,8 +638,8 @@ routing-options static route 192.0.2.1/32 discard;
 
 ## As telas
 
-Interface no padrão **Hexanium** (`guia-de-interface-interno`) — dark por padrão,
-tokens HSL, sidebar 248/64px.
+Interface no design system interno da Hexa — dark por padrão, tokens HSL,
+sidebar 248/64px.
 
 | Tela | O que faz |
 |---|---|
