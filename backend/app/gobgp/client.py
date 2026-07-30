@@ -29,6 +29,19 @@ class GoBGPError(RuntimeError):
     pass
 
 
+def _ja_existe(exc: grpc.RpcError) -> bool:
+    """O objeto ja existia no gobgpd. As mensagens variam por RPC.
+
+    'already defined' vem do AddPolicy/AddStatement; as outras aparecem em
+    versoes e chamadas diferentes. Comparar por substring e fragil, mas a API
+    nao devolve um codigo distinto para isso - por isso o caminho principal e
+    checar a existencia antes (ver _policy_exists), com isto de rede de seguranca
+    para corridas entre o watchdog e uma acao da UI.
+    """
+    d = (exc.details() or "").lower()
+    return any(t in d for t in ("already defined", "already exists", "duplicate"))
+
+
 class GoBGPClient:
     def __init__(self, target: str | None = None):
         settings = get_settings()
@@ -121,14 +134,34 @@ class GoBGPClient:
                 )
             ],
         )
+        # Cada etapa e idempotente por conta propria. Antes isso vinha num try
+        # unico que so tolerava "already exists"/"duplicate"; o GoBGP responde
+        # "already defined", entao a partir do 2o reconcile a excecao subia e
+        # derrubava a reconciliacao inteira - inclusive a parte de rotas e peers.
         try:
             self._stub.AddDefinedSet(
                 gobgp_pb2.AddDefinedSetRequest(defined_set=neighbor_set, replace=True),
                 timeout=10,
             )
-            self._stub.AddPolicy(
-                gobgp_pb2.AddPolicyRequest(policy=policy), timeout=10
-            )
+        except grpc.RpcError as exc:
+            if not _ja_existe(exc):
+                raise GoBGPError(
+                    f"nao consegui criar o neighbor-set: {exc.details()}"
+                ) from None
+
+        if not self._policy_exists(REJECT_PEERS_POLICY):
+            try:
+                self._stub.AddPolicy(
+                    gobgp_pb2.AddPolicyRequest(policy=policy), timeout=10
+                )
+            except grpc.RpcError as exc:
+                if not _ja_existe(exc):
+                    raise GoBGPError(
+                        f"nao consegui criar a policy: {exc.details()}"
+                    ) from None
+
+        # A atribuicao e o que de fato liga a policy; sempre reaplica.
+        try:
             self._stub.SetPolicyAssignment(
                 gobgp_pb2.SetPolicyAssignmentRequest(
                     assignment=gobgp_pb2.PolicyAssignment(
@@ -141,13 +174,20 @@ class GoBGPClient:
                 timeout=10,
             )
         except grpc.RpcError as exc:
-            details = (exc.details() or "").lower()
-            # AddPolicy/AddDefinedSet sao idempotentes na pratica: ja existir e ok.
-            if "already exists" in details or "duplicate" in details:
-                return
             raise GoBGPError(
                 f"nao consegui aplicar import reject-all: {exc.details()}"
             ) from None
+
+    def _policy_exists(self, name: str) -> bool:
+        try:
+            for resp in self._stub.ListPolicy(
+                gobgp_pb2.ListPolicyRequest(name=name), timeout=10
+            ):
+                if resp.policy.name == name:
+                    return True
+        except grpc.RpcError:
+            return False
+        return False
 
     def import_policy_state(self) -> dict:
         """Le a atribuicao global de import (usado no /stats e na UI)."""

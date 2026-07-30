@@ -113,3 +113,35 @@ def test_communities():
             raise AssertionError(f"deveria rejeitar {ruim}")
         except RouteRejected:
             pass
+
+
+# ── regressao: idempotencia da politica de import ────────────────────────────
+#
+# A policy reject-all e reaplicada a cada reconcile. Na primeira versao as
+# chamadas vinham num try unico que so tolerava "already exists"/"duplicate";
+# o GoBGP responde "already defined", entao a partir do 2o reconcile a excecao
+# subia e derrubava a reconciliacao inteira - rotas e peers junto. Ficou 18h
+# quebrado em producao sem ninguem ver, porque o RIB ja estava correto e so
+# falharia num restart do gobgpd.
+
+class _FakeRpcError(Exception):
+    def __init__(self, detail):
+        self._detail = detail
+
+    def details(self):
+        return self._detail
+
+
+def test_ja_existe_reconhece_as_variantes_do_gobgp():
+    from app.gobgp.client import _ja_existe
+    for msg in ("statement pigcop-reject-from-peers-stmt already defined",
+                "policy already exists",
+                "duplicate entry",
+                "Statement ALREADY DEFINED"):
+        assert _ja_existe(_FakeRpcError(msg)), f"deveria tolerar: {msg}"
+
+
+def test_ja_existe_nao_engole_erro_real():
+    from app.gobgp.client import _ja_existe
+    for msg in ("connection refused", "permission denied", None, ""):
+        assert not _ja_existe(_FakeRpcError(msg)), f"nao deveria tolerar: {msg}"
