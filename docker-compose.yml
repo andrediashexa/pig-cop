@@ -4,6 +4,8 @@ services:
       context: ./gobgpd
       args:
         GOBGP_VERSION: ${GOBGP_VERSION:-v4.7.0}
+        DISABLE_CAP_SOFTWARE_VERSION: ${DISABLE_CAP_SOFTWARE_VERSION:-1}
+        DISABLE_CAP_EXTENDED_MESSAGE: ${DISABLE_CAP_EXTENDED_MESSAGE:-0}
     image: pigcop/gobgpd:${GOBGP_VERSION:-v4.7.0}
     container_name: pigcop-gobgpd
     restart: unless-stopped
