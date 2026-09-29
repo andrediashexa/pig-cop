@@ -145,3 +145,55 @@ def test_ja_existe_nao_engole_erro_real():
     from app.gobgp.client import _ja_existe
     for msg in ("connection refused", "permission denied", None, ""):
         assert not _ja_existe(_FakeRpcError(msg)), f"nao deveria tolerar: {msg}"
+
+
+# ── regressao: community com ASN de 4 bytes no DEFAULT_COMMUNITIES ───────────
+#
+# Um provedor com ASN 65536 configurou DEFAULT_COMMUNITIES=65536:666. Nada
+# validava o .env: cada injecao estourava o uint32 do protobuf, o RIB ficava
+# vazio e a UI so mostrava "Value out of range: 4294967962" (= 65536<<16|666).
+
+def test_community_asn_4_bytes_sugere_large():
+    from app.config import community_problem
+
+    problem = community_problem("65536:666")
+    assert problem and "65536:0:666" in problem
+    assert community_problem("65535:666") is None
+    assert community_problem("65536:0:666") is None
+    try:
+        validate_communities("65536:666")
+        raise AssertionError("deveria rejeitar ASN de 4 bytes em community normal")
+    except RouteRejected as exc:
+        assert "65536:0:666" in str(exc)
+
+
+def test_config_errors_do_env():
+    from app.config import Settings
+
+    ok = Settings(local_asn=65536, router_id="192.0.2.10",
+                  default_next_hop="192.0.2.1", default_communities="65536:0:666")
+    assert ok.config_errors() == []
+
+    ruim = Settings(local_asn=99999999999, router_id="", default_next_hop="x",
+                    default_communities="65536:666")
+    erros = " | ".join(ruim.config_errors())
+    for trecho in ("LOCAL_ASN", "ROUTER_ID", "DEFAULT_NEXT_HOP", "65536:0:666"):
+        assert trecho in erros, trecho
+
+
+def test_build_path_explica_community_invalida():
+    from app.gobgp.client import GoBGPError, _build_path
+
+    try:
+        _build_path("1.2.3.4/32", 32, "ipv4", "192.0.2.1", "65536:666")
+        raise AssertionError("deveria recusar")
+    except GoBGPError as exc:
+        assert "1.2.3.4/32" in str(exc) and "65536:0:666" in str(exc)
+        assert "Value out of range" not in str(exc)
+
+
+def test_prefixo_protegido_invalido_e_reportado():
+    from app.config import Settings
+
+    s = Settings(protected_prefixes="45.66.0.0/22, 45.66.0.0/33, blah")
+    assert s.invalid_protected_prefixes() == ["45.66.0.0/33", "blah"]

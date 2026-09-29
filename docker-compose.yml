@@ -18,7 +18,8 @@ services:
       GRPC_LISTEN: ${GRPC_LISTEN:-127.0.0.1:50051}
       LOG_LEVEL: ${GOBGP_LOG_LEVEL:-info}
     healthcheck:
-      test: ["CMD", "gobgp", "--host", "127.0.0.1", "global"]
+      # Mesmo host:porta do GRPC_LISTEN ($$ = o shell do container expande, nao o compose).
+      test: ["CMD-SHELL", "gobgp --host \"$${GRPC_LISTEN%:*}\" --port \"$${GRPC_LISTEN##*:}\" global >/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 3

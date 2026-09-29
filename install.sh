@@ -29,6 +29,48 @@ info()  { printf '  %s·%s %s\n' "$DIM" "$RESET" "$1"; }
 warn()  { printf '  %s!%s %s\n' "$YELLOW" "$RESET" "$1"; }
 die()   { printf '\n%s✗ %s%s\n\n' "$RED" "$1" "$RESET" >&2; exit 1; }
 
+# ── validação (as mesmas regras do backend, em app/config.py) ────────────────
+is_ipv4() {
+  local IFS=. o; local -a octets
+  [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  read -ra octets <<< "$1"
+  for o in "${octets[@]}"; do [ "$((10#$o))" -le 255 ] || return 1; done
+}
+is_ip() { is_ipv4 "$1" || [[ "$1" =~ ^[0-9A-Fa-f:.]+$ && "$1" == *:* ]]; }
+is_asn() { [[ "$1" =~ ^[0-9]{1,10}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 4294967295 ]; }
+
+# Imprime o problema da community (vazio = ok). Standard é 16:16 bits: ASN de
+# 4 bytes não cabe, e o erro só aparecia depois, na UI, como "Value out of range".
+community_problem() {
+  local c="$1" a b
+  if [[ "$c" =~ ^([0-9]{1,10}):([0-9]{1,10})$ ]]; then
+    a="${BASH_REMATCH[1]}"; b="${BASH_REMATCH[2]}"
+    if [ "$a" -gt 65535 ] && [ "$a" -le 4294967295 ]; then
+      echo "$c: $a é ASN de 4 bytes e não cabe numa community normal (16:16 bits). Use a large community $a:0:$b ou 65535:666 (BLACKHOLE)"
+    elif [ "$a" -gt 65535 ] || [ "$b" -gt 65535 ]; then
+      echo "$c: fora do range (cada parte vai de 0 a 65535)"
+    fi
+  elif [[ "$c" =~ ^([0-9]{1,10}):([0-9]{1,10}):([0-9]{1,10})$ ]]; then
+    for a in "${BASH_REMATCH[@]:1}"; do
+      [ "$a" -le 4294967295 ] || { echo "$c: large community fora do range"; return; }
+    done
+  else
+    echo "$c: formato inválido (use 65535:666 ou ASN:0:666)"
+  fi
+}
+check_communities() {
+  local item problem
+  IFS=, read -ra _items <<< "$1"
+  for item in "${_items[@]}"; do
+    item="${item// /}"; [ -n "$item" ] || continue
+    problem="$(community_problem "$item")"
+    [ -z "$problem" ] || { echo "$problem"; return 1; }
+  done
+}
+
+# Escapa para string JSON (senha no login da importação).
+json_str() { local s="${1//\\/\\\\}"; s="${s//\"/\\\"}"; printf '"%s"' "$s"; }
+
 # ── defaults ─────────────────────────────────────────────────────────────────
 ADMIN_USER="hexanetworks"
 ADMIN_PASSWORD=""
@@ -128,8 +170,10 @@ else
 fi
 
 if [ -z "$ROUTER_ID" ]; then
-  ROUTER_ID="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1)"
-  [ -n "$ROUTER_ID" ] || ROUTER_ID="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  # Sem rota default (rede de gerência isolada) o 'ip route get' sai com erro;
+  # com pipefail isso matava o script aqui, sem mensagem nenhuma.
+  ROUTER_ID="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1 || true)"
+  [ -n "$ROUTER_ID" ] || ROUTER_ID="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -m1 -E '^[0-9]+(\.[0-9]+){3}$' || true)"
 fi
 
 # ── 2. dependências ──────────────────────────────────────────────────────────
@@ -141,37 +185,76 @@ apt_install() {
   apt-get install -y -qq --no-install-recommends "$@" >/dev/null
 }
 
+is_debian_like() { case "$OS_ID $OS_LIKE" in *debian*|*ubuntu*) return 0 ;; esac; return 1; }
+is_rhel_like()   { case "$OS_ID $OS_LIKE" in *rhel*|*fedora*|*centos*|*rocky*|*almalinux*) return 0 ;; esac; return 1; }
+
 install_base() {
-  local missing=()
-  for pkg in curl ca-certificates iproute2; do
-    case "$pkg" in
-      curl)       command -v curl >/dev/null 2>&1 || missing+=("$pkg") ;;
-      iproute2)   command -v ss   >/dev/null 2>&1 || missing+=("$pkg") ;;
-      *)          missing+=("$pkg") ;;
-    esac
-  done
+  local missing=() iproute_pkg=iproute2
+  is_rhel_like && iproute_pkg=iproute   # no RHEL o pacote do 'ss' chama iproute
+  command -v curl >/dev/null 2>&1 || missing+=(curl)
+  command -v ss   >/dev/null 2>&1 || missing+=("$iproute_pkg")
+  [ -s /etc/ssl/certs/ca-certificates.crt ] || [ -s /etc/pki/tls/certs/ca-bundle.crt ] \
+    || missing+=(ca-certificates)
   if [ ${#missing[@]} -gt 0 ]; then
-    case "$OS_ID $OS_LIKE" in
-      *debian*|*ubuntu*) info "instalando: ${missing[*]}"; apt_install "${missing[@]}" ;;
-      *rhel*|*fedora*|*centos*|*rocky*|*almalinux*)
-        info "instalando: ${missing[*]}"
-        (command -v dnf >/dev/null && dnf install -y -q "${missing[@]}" \
-          || yum install -y -q "${missing[@]}") >/dev/null ;;
-      *) warn "instale manualmente: ${missing[*]}" ;;
-    esac
+    info "instalando: ${missing[*]}"
+    if is_debian_like; then
+      apt_install "${missing[@]}" || die "apt-get não conseguiu instalar: ${missing[*]}"
+    elif is_rhel_like; then
+      { command -v dnf >/dev/null 2>&1 && dnf install -y -q "${missing[@]}"; } \
+        || yum install -y -q "${missing[@]}" \
+        || die "dnf/yum não conseguiu instalar: ${missing[*]}"
+    else
+      die "instale manualmente e rode de novo: ${missing[*]}"
+    fi
   fi
   ok "utilitários base presentes"
 }
 
+# O repositório da Docker só existe para debian, ubuntu e raspbian. Derivados
+# (Mint, Pop!_OS, Kali, ...) usam o do pai, com o codinome do pai.
+docker_apt_target() {
+  local debver
+  case "$OS_ID" in
+    debian|ubuntu|raspbian) echo "$OS_ID ${VERSION_CODENAME:-}"; return ;;
+  esac
+  case "$OS_LIKE" in
+    *ubuntu*) echo "ubuntu ${UBUNTU_CODENAME:-}"; return ;;
+  esac
+  debver="$(cut -d. -f1 /etc/debian_version 2>/dev/null || true)"
+  case "$debver" in
+    11) echo "debian bullseye" ;;
+    12) echo "debian bookworm" ;;
+    13) echo "debian trixie" ;;
+    *)  echo "debian ${DEBIAN_CODENAME:-}" ;;
+  esac
+}
+
 install_docker_debian() {
+  local repo codename
+  read -r repo codename <<< "$(docker_apt_target)"
+  [ -n "$codename" ] || die "não identifiquei a versão base de $OS_ID para o repositório da Docker; instale o Docker à mão e rode com --skip-docker"
+  info "repositório da Docker: $repo $codename"
   install -m 0755 -d /etc/apt/keyrings
   local key=/etc/apt/keyrings/docker.asc
-  [ -f "$key" ] || curl -fsSL "https://download.docker.com/linux/$OS_ID/gpg" -o "$key"
+  [ -f "$key" ] || curl -fsSL "https://download.docker.com/linux/$repo/gpg" -o "$key" \
+    || die "não consegui baixar a chave do repositório da Docker"
   chmod a+r "$key"
-  local codename="${VERSION_CODENAME:-$(. /etc/os-release && echo "${VERSION_CODENAME:-stable}")}"
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=$key] https://download.docker.com/linux/$OS_ID $codename stable" \
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=$key] https://download.docker.com/linux/$repo $codename stable" \
     > /etc/apt/sources.list.d/docker.list
-  apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
+    || die "apt-get falhou instalando o Docker (veja o erro acima)"
+}
+
+# get.docker.com não suporta AlmaLinux; o repositório RPM oficial serve a
+# família toda (RHEL/Rocky/Alma usam o de rhel, Fedora o próprio).
+install_docker_rhel() {
+  local repo=rhel pm=dnf
+  [ "$OS_ID" = fedora ] && repo=fedora
+  command -v dnf >/dev/null 2>&1 || pm=yum
+  curl -fsSL "https://download.docker.com/linux/$repo/docker-ce.repo" -o /etc/yum.repos.d/docker-ce.repo \
+    || die "não consegui baixar o docker-ce.repo"
+  $pm install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
+    || die "$pm falhou instalando o Docker (veja o erro acima)"
 }
 
 install_base
@@ -182,13 +265,15 @@ elif command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1
   ok "Docker $(docker --version | sed 's/Docker version //;s/,.*//') + Compose já instalados"
 else
   info "instalando Docker Engine + plugin Compose (repositório oficial da Docker)"
-  case "$OS_ID $OS_LIKE" in
-    *debian*|*ubuntu*) install_docker_debian ;;
-    *)
-      warn "distribuição sem caminho explícito aqui; usando o script oficial get.docker.com"
-      curl -fsSL https://get.docker.com | sh >/dev/null
-      ;;
-  esac
+  if is_debian_like; then
+    install_docker_debian
+  elif is_rhel_like; then
+    install_docker_rhel
+  else
+    warn "distribuição sem caminho explícito aqui; usando o script oficial get.docker.com"
+    curl -fsSL https://get.docker.com | sh >/dev/null \
+      || die "get.docker.com não suporta esta distribuição; instale o Docker à mão e rode com --skip-docker"
+  fi
   systemctl enable --now docker >/dev/null 2>&1 || true
   command -v docker >/dev/null 2>&1 || die "a instalação do Docker falhou"
   ok "Docker instalado"
@@ -200,6 +285,18 @@ ok "daemon do Docker respondendo"
 
 # ── 3. portas ────────────────────────────────────────────────────────────────
 step "Checando as portas"
+
+# Reinstalação: o .env preservado manda na porta. Antes a checagem olhava a
+# padrão/flag e só depois lia o .env - barrava a porta errada e deixava passar
+# a que o frontend ia de fato usar.
+KEEP_ENV=0
+if [ -f .env ] && [ "$FORCE_ENV" -eq 0 ]; then
+  KEEP_ENV=1
+  WEB_PORT="$(sed -n 's/^WEB_PORT=//p' .env | head -1 || true)"
+  WEB_PORT="${WEB_PORT:-5173}"
+fi
+[[ "$WEB_PORT" =~ ^[0-9]+$ ]] && [ "$WEB_PORT" -ge 1 ] && [ "$WEB_PORT" -le 65535 ] \
+  || die "porta web inválida: $WEB_PORT"
 
 port_owner() { ss -lntpH 2>/dev/null | awk -v p=":$1\$" '$4 ~ p {print $6; exit}'; }
 
@@ -230,16 +327,15 @@ ask() { # ask VAR "pergunta" "default"
 
 rand_hex() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
-bcrypt_hash() { # senha via stdin-safe env, nunca na linha de comando
+bcrypt_hash() { # senha via env, nunca na linha de comando
+  # O pip só mostra a saída se falhar (ex.: container sem acesso ao PyPI).
   docker run --rm -e PIGCOP_PWD="$1" python:3.11-slim sh -c \
-    'pip install --quiet --disable-pip-version-check bcrypt >/dev/null 2>&1
+    'out=$(pip install --quiet --disable-pip-version-check bcrypt 2>&1) || { echo "$out" | tail -3 >&2; exit 1; }
      python -c "import bcrypt,os;print(bcrypt.hashpw(os.environ[\"PIGCOP_PWD\"].encode(),bcrypt.gensalt(rounds=12)).decode())"'
 }
 
-if [ -f .env ] && [ "$FORCE_ENV" -eq 0 ]; then
+if [ "$KEEP_ENV" -eq 1 ]; then
   ok ".env já existe — preservado (use --force-env para regerar os segredos)"
-  WEB_PORT="$(sed -n 's/^WEB_PORT=//p' .env | head -1 || true)"
-  WEB_PORT="${WEB_PORT:-5173}"
   ADMIN_USER="$(sed -n 's/^ADMIN_USER=//p' .env | head -1 || true)"
   ADMIN_USER="${ADMIN_USER:-hexanetworks}"
 else
@@ -249,19 +345,35 @@ else
     ask LOCAL_ASN "ASN local do controller" ""
     [ -n "$LOCAL_ASN" ] || die "o ASN local é obrigatório (--asn)"
   fi
-  printf '%s' "$LOCAL_ASN" | grep -qE '^[0-9]+$' || die "ASN inválido: $LOCAL_ASN"
+  is_asn "$LOCAL_ASN" || die "ASN inválido: $LOCAL_ASN (1 a 4294967295)"
 
   ask ROUTER_ID   "router-id BGP"                          "$ROUTER_ID"
+  [ -n "$ROUTER_ID" ] || die "não detectei o IP do host para o router-id; informe com --router-id"
+  is_ipv4 "$ROUTER_ID" || die "router-id inválido: $ROUTER_ID (tem que ser um IPv4)"
   ask NEXT_HOP    "next-hop de descarte a anunciar"        "$NEXT_HOP"
-  ask COMMUNITIES "communities padrão"                     "$COMMUNITIES"
+  is_ip "$NEXT_HOP" || die "next-hop inválido: $NEXT_HOP"
+  if [ "$LOCAL_ASN" -gt 65535 ] && [ "$COMMUNITIES" = "65535:666" ]; then
+    info "ASN de 4 bytes: community própria tem que ser large (ex.: $LOCAL_ASN:0:666)"
+  fi
+  while :; do
+    ask COMMUNITIES "communities padrão"                   "$COMMUNITIES"
+    problem="$(check_communities "$COMMUNITIES")" && break
+    [ "$INTERACTIVE" -eq 1 ] || die "$problem"
+    warn "$problem"
+  done
   ask ADMIN_USER  "usuário do login web"                   "$ADMIN_USER"
 
-  if [ -z "$PROTECTED" ]; then
+  if [ -z "$PROTECTED" ] && [ "$INTERACTIVE" -eq 1 ]; then
     printf '  %sPrefixos protegidos: blocos que o controller NUNCA vai anunciar.%s\n' "$DIM" "$RESET"
     printf '  %sColoque os seus e os dos clientes — é o que evita blackhole acidental.%s\n' "$DIM" "$RESET"
     ask PROTECTED "prefixos protegidos (CSV, pode deixar vazio)" ""
   fi
   [ -n "$PROTECTED" ] || warn "PROTECTED_PREFIXES vazio — preencha depois no .env"
+  IFS=, read -ra _prot <<< "$PROTECTED"
+  for pfx in "${_prot[@]}"; do
+    pfx="${pfx// /}"; [ -n "$pfx" ] || continue
+    [[ "$pfx" =~ ^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$ ]] || die "prefixo protegido inválido: $pfx"
+  done
 
   if [ -z "$ADMIN_PASSWORD" ]; then
     if [ "$INTERACTIVE" -eq 1 ]; then
@@ -281,8 +393,9 @@ else
   fi
 
   info "gerando hash bcrypt (cost 12)…"
-  HASH="$(bcrypt_hash "$ADMIN_PASSWORD")"
-  printf '%s' "$HASH" | grep -q '^\$2[aby]\$' || die "não consegui gerar o hash bcrypt"
+  HASH="$(bcrypt_hash "$ADMIN_PASSWORD")" \
+    || die "não consegui gerar o hash bcrypt: o container python:3.11-slim precisa baixar o pacote bcrypt do PyPI (veja o erro acima)"
+  printf '%s' "$HASH" | grep -q '^\$2[aby]\$' || die "não consegui gerar o hash bcrypt (saída inesperada)"
   # O Compose interpola $VAR dentro do .env: cada $ do hash tem que ser $$.
   HASH_ESCAPED="${HASH//$/\$\$}"
   JWT="$(rand_hex)"
@@ -305,6 +418,9 @@ COOKIE_SECURE=false
 
 # ── BGP ──────────────────────────────────────────────────────────────────────
 GOBGP_VERSION=v4.7.0
+# Capabilities do OPEN desligadas no build (ver gobgpd/Dockerfile).
+DISABLE_CAP_SOFTWARE_VERSION=1
+DISABLE_CAP_EXTENDED_MESSAGE=0
 GRPC_LISTEN=127.0.0.1:50051
 GOBGP_LOG_LEVEL=info
 LOCAL_ASN=$LOCAL_ASN
@@ -351,10 +467,25 @@ if [ -z "$HEALTH" ]; then
   warn "o backend não respondeu em 120s. Diagnostique com: docker compose logs backend"
 else
   ok "backend no ar"
-  if printf '%s' "$HEALTH" | grep -q '"gobgp": *true'; then
-    ok "gRPC do gobgpd respondendo"
-  else
+  # O backend responde JSON compacto ({"gobgp":true}); os regex aceitam os dois.
+  CONFIG_ERRORS="$(printf '%s' "$HEALTH" | sed -n 's/.*"config_errors": *\[\([^]]*\)\].*/\1/p')"
+  if [ -n "$CONFIG_ERRORS" ]; then
+    warn "configuração inválida no .env — nenhuma rota vai ser anunciada:"
+    printf '%s\n' "$CONFIG_ERRORS" | sed 's/^"//;s/"$//;s/","/\n/g' | sed 's/^/      /'
+    warn "corrija o .env e rode: docker compose up -d backend"
+  elif ! printf '%s' "$HEALTH" | grep -q '"gobgp": *true'; then
     warn "o backend subiu mas não falou com o gobgpd ainda; o watchdog tenta de novo"
+  else
+    ok "gRPC do gobgpd respondendo"
+    for _ in $(seq 1 10); do
+      printf '%s' "$HEALTH" | grep -q '"bgp": *true' && break
+      sleep 1; HEALTH="$(curl -fsS "http://127.0.0.1:4000/api/health" 2>/dev/null || true)"
+    done
+    if printf '%s' "$HEALTH" | grep -q '"bgp": *true'; then
+      ok "BGP iniciado"
+    else
+      warn "o BGP ainda não iniciou; veja: docker compose logs backend | grep -i reconcile"
+    fi
   fi
 fi
 docker compose ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null | sed 's/^/  /'
@@ -372,29 +503,41 @@ if [ "$DO_IMPORT" = "ask" ]; then
 fi
 
 if [ "$DO_IMPORT" = "yes" ] && [ -f rotas.rsc ] && [ -n "$ADMIN_PASSWORD" ]; then
-  JAR="$(mktemp)"; trap 'rm -f "$JAR"' EXIT
-  if curl -fsS -c "$JAR" -X POST "http://127.0.0.1:4000/api/auth/login" \
-        -H 'content-type: application/json' \
-        --data-raw "$(printf '{"username":"%s","password":"%s"}' "$ADMIN_USER" "$ADMIN_PASSWORD")" \
-        -o /dev/null; then
-    RESP="$(curl -fsS -b "$JAR" -X POST "http://127.0.0.1:4000/api/routes/import" \
-              -F "file=@rotas.rsc" -F 'only_list=BLOCK-BGP' || true)"
-    JOB="$(printf '%s' "$RESP" | sed -n 's/.*"job_id": *"\([^"]*\)".*/\1/p')"
-    if [ -n "$JOB" ]; then
-      printf '  %s·%s importando' "$DIM" "$RESET"
-      for _ in $(seq 1 120); do
-        J="$(curl -fsS -b "$JAR" "http://127.0.0.1:4000/api/jobs/$JOB" 2>/dev/null || true)"
-        case "$J" in
-          *'"status": "done"'*)  echo; ok "importado: $(printf '%s' "$J" | sed -n 's/.*"injetados": *\([0-9]*\).*/\1/p') prefixos injetados no BGP"; break ;;
-          *'"status": "error"'*) echo; warn "a importação falhou: $J"; break ;;
-          *) printf '.'; sleep 1 ;;
-        esac
-      done
-    else
-      info "nada novo para importar"
-    fi
+  JAR="$(mktemp)"; BODY="$(mktemp)"; trap 'rm -f "$JAR" "$BODY"' EXIT
+  api() { # api MÉTODO CAMINHO [args do curl...] -> imprime o HTTP code, corpo em $BODY
+    local m="$1" path="$2"; shift 2
+    curl -sS -o "$BODY" -w '%{http_code}' -b "$JAR" -c "$JAR" -X "$m" \
+      "http://127.0.0.1:4000/api$path" "$@" 2>/dev/null || echo 000
+  }
+  detail() { sed -n 's/.*"detail": *"\([^"]*\)".*/\1/p' "$BODY"; }
+
+  CODE="$(api POST /auth/login -H 'content-type: application/json' \
+          --data-raw "{\"username\":$(json_str "$ADMIN_USER"),\"password\":$(json_str "$ADMIN_PASSWORD")}")"
+  if [ "$CODE" != 200 ]; then
+    warn "não consegui autenticar para importar (HTTP $CODE $(detail)); faça pela tela Importar"
   else
-    warn "não consegui autenticar para importar; faça pela tela Importar"
+    CODE="$(api POST /routes/import -F "file=@rotas.rsc" -F 'only_list=BLOCK-BGP')"
+    JOB="$(sed -n 's/.*"job_id": *"\([^"]*\)".*/\1/p' "$BODY")"
+    if [ "$CODE" != 200 ]; then
+      warn "a importação foi recusada (HTTP $CODE): $(detail)"
+    elif [ -z "$JOB" ]; then
+      info "nada novo para importar"
+    else
+      printf '  %s·%s importando' "$DIM" "$RESET"
+      STATUS=""
+      for _ in $(seq 1 180); do
+        api GET "/jobs/$JOB" >/dev/null
+        STATUS="$(sed -n 's/.*"status": *"\([a-z]*\)".*/\1/p' "$BODY")"
+        case "$STATUS" in done|error) break ;; esac
+        printf '.'; sleep 1
+      done
+      echo
+      case "$STATUS" in
+        done)  ok "importado: $(sed -n 's/.*"injetados": *\([0-9]*\).*/\1/p' "$BODY") prefixos injetados no BGP" ;;
+        error) warn "a importação falhou: $(sed -n 's/.*"error": *"\([^"]*\)".*/\1/p' "$BODY")" ;;
+        *)     warn "a importação não terminou em 180s; acompanhe pela tela Importar" ;;
+      esac
+    fi
   fi
 elif [ "$DO_IMPORT" = "yes" ]; then
   info "importe pela tela Importar (preciso da senha em texto para usar a API)"

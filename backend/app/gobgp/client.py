@@ -42,6 +42,22 @@ def _ja_existe(exc: grpc.RpcError) -> bool:
     return any(t in d for t in ("already defined", "already exists", "duplicate"))
 
 
+def _build_path(prefix: str, prefix_len: int, family: str, next_hop: str,
+                communities: str | None):
+    """encode.build_path com o erro de montagem virando GoBGPError legivel.
+
+    O protobuf so diz "Value out of range: <numero>"; aqui sai o prefixo e o
+    motivo, que e o que aparece no card de erro da UI.
+    """
+    try:
+        return encode.build_path(prefix, prefix_len, family, next_hop, communities)
+    except ValueError as exc:
+        raise GoBGPError(
+            f"nao consegui montar o anuncio de {prefix} "
+            f"(next-hop {next_hop}, communities {communities}): {exc}"
+        ) from None
+
+
 class GoBGPClient:
     def __init__(self, target: str | None = None):
         settings = get_settings()
@@ -300,7 +316,7 @@ class GoBGPClient:
 
     def add_path(self, prefix: str, prefix_len: int, family: str,
                  next_hop: str, communities: str | None) -> None:
-        path = encode.build_path(prefix, prefix_len, family, next_hop, communities)
+        path = _build_path(prefix, prefix_len, family, next_hop, communities)
         try:
             self._stub.AddPath(
                 gobgp_pb2.AddPathRequest(
@@ -324,7 +340,7 @@ class GoBGPClient:
 
         for row in rows:
             batch.append(
-                encode.build_path(
+                _build_path(
                     row["prefix"], row["prefix_len"], row["family"],
                     row.get("next_hop") or settings.default_next_hop,
                     row.get("communities") or settings.default_communities,
@@ -351,7 +367,7 @@ class GoBGPClient:
 
     def delete_path(self, prefix: str, prefix_len: int, family: str,
                     next_hop: str, communities: str | None) -> None:
-        path = encode.build_path(prefix, prefix_len, family, next_hop, communities)
+        path = _build_path(prefix, prefix_len, family, next_hop, communities)
         try:
             self._stub.DeletePath(
                 gobgp_pb2.DeletePathRequest(

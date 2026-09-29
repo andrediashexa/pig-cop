@@ -120,6 +120,9 @@ def reconcile_all() -> dict:
 
     started = time.monotonic()
     try:
+        errors = get_settings().config_errors()
+        if errors:
+            raise GoBGPError("configuracao invalida no .env: " + "; ".join(errors))
         client = get_client()
         client.ensure_started()
         peers = reconcile_peers()
@@ -143,9 +146,19 @@ def reconcile_all() -> dict:
 
 
 class ReconcileLoop(threading.Thread):
-    """Watchdog: reconcilia a cada RECONCILE_INTERVAL segundos."""
+    """Watchdog: reconcilia a cada RECONCILE_INTERVAL segundos, e na hora em
+    que perceber que o gobgpd reiniciou.
+
+    Um gobgpd reiniciado volta sem BGP global, sem peers e sem rotas. Esperar o
+    proximo ciclo deixava o cliente ate RECONCILE_INTERVAL sem nenhum anuncio -
+    e mais um ciclo inteiro quando a 1a chamada caia na conexao gRPC antiga
+    (Broken pipe). Agora um GetBgp barato a cada TICK detecta o restart, e
+    falha de reconcile tenta de novo com backoff curto em vez de esperar o
+    intervalo cheio.
+    """
 
     daemon = True
+    TICK = 5
 
     def __init__(self) -> None:
         super().__init__(name="reconcile-loop")
@@ -153,22 +166,31 @@ class ReconcileLoop(threading.Thread):
 
     def run(self) -> None:
         interval = max(15, get_settings().reconcile_interval)
-        # Primeira passada logo no boot, com retry ate o gobgpd subir.
-        for attempt in range(30):
-            if self._stop.is_set():
-                return
-            try:
-                reconcile_all()
-                break
-            except Exception as exc:  # noqa: BLE001
-                log.warning("reconcile inicial (tentativa %d): %s", attempt + 1, exc)
-                self._stop.wait(2)
+        next_run = 0.0  # primeira passada logo no boot
+        failures = 0
+        while not self._stop.is_set():
+            if time.monotonic() >= next_run or self._gobgpd_restarted():
+                try:
+                    reconcile_all()
+                    failures = 0
+                    next_run = time.monotonic() + interval
+                except Exception:  # noqa: BLE001 - ja logado em reconcile_all
+                    failures += 1
+                    # 5, 10, 20, 40s... ate o intervalo normal
+                    next_run = time.monotonic() + min(interval, self.TICK * 2 ** min(failures - 1, 5))
+            self._stop.wait(self.TICK)
 
-        while not self._stop.wait(interval):
-            try:
-                reconcile_all()
-            except Exception:  # noqa: BLE001 - ja logado em reconcile_all
-                pass
+    @staticmethod
+    def _gobgpd_restarted() -> bool:
+        """gobgpd no ar mas sem BGP global = acabou de (re)iniciar."""
+        if get_settings().config_errors():
+            # Com o .env invalido o BGP nunca sobe; nao da para distinguir de um
+            # restart, e insistir a cada TICK so encheria o log. O backoff cuida.
+            return False
+        try:
+            return get_client().get_bgp(timeout=2.0) is None
+        except GoBGPError:
+            return False  # inacessivel: o reconcile agendado/backoff tenta de novo
 
     def stop(self) -> None:
         self._stop.set()

@@ -47,6 +47,20 @@ class BulkIdsBody(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=20000)
 
 
+def _require_valid_config() -> None:
+    """Recusa ANTES de gravar no banco se o .env impede anunciar.
+
+    Sem isto a rota ia para o banco, a injecao falhava, e a UI ficava com
+    "N de diferenca com o banco" e um erro que ninguem sabia de onde vinha.
+    """
+    errors = get_settings().config_errors()
+    if errors:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "configuracao invalida no .env, nada foi gravado: " + "; ".join(errors),
+        )
+
+
 def _count_routes() -> int:
     return get_conn().execute("SELECT COUNT(*) AS c FROM routes").fetchone()["c"]
 
@@ -130,6 +144,7 @@ def categories(user: str = RequireUser):
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def add_route(body: RouteBody, request: Request, user: str = RequireUser):
+    _require_valid_config()
     settings = get_settings()
     if _count_routes() >= settings.max_routes:
         raise HTTPException(
@@ -296,6 +311,7 @@ async def commit_import(
     user: str = RequireUser,
 ):
     """Importa de fato. Devolve job_id; o progresso vai por /api/jobs/{id}."""
+    _require_valid_config()
     content, only_list, category = await _read_payload(request, file)
     parsed = parse_auto(content, only_list=only_list, category=category)
     settings = get_settings()
@@ -347,6 +363,7 @@ async def commit_import(
 @router.post("/bulk")
 def bulk_add(body: BulkBody, request: Request, user: str = RequireUser):
     """Adiciona vários prefixos colados na UI (um por linha)."""
+    _require_valid_config()
     parsed = parse_auto(body.content, only_list=body.only_list, category=body.category)
     try:
         next_hop = validate_next_hop(body.next_hop)

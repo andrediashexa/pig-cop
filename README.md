@@ -215,18 +215,17 @@ cp .env.example .env
 A saída é algo assim:
 
 ```
-ADMIN_PASSWORD_HASH=$2b$12$EXEMPLOEXEMPLOEXEMPLOexemploexemploexemploexemploexe
+ADMIN_PASSWORD_HASH=$$2b$$12$$EXEMPLOEXEMPLOEXEMPLOexemploexemploexemploexemploexe
 JWT_SECRET=0000exemplo0000exemplo0000exemplo0000exemplo0000exemplo0000exem
 ```
 
 > [!WARNING]
-> **Escape cada `$` do hash como `$$` ao colar no `.env`.**
-> O Docker Compose interpola `$VAR` dentro do `.env` — sem escapar, o hash bcrypt
+> **O hash já sai com cada `$` escapado como `$$` — cole do jeito que está.**
+> O Docker Compose interpola `$VAR` dentro do `.env`: sem o escape, o hash bcrypt
 > chega truncado no container e o login falha sem erro claro.
-> `$2b$12$abc...` vira `$$2b$$12$$abc...`
 
 ```bash
-nano .env          # cole o hash escapado + o JWT_SECRET
+nano .env          # cole as duas linhas
 chmod 600 .env
 ```
 
@@ -238,9 +237,15 @@ Ainda no `.env` — **isto não é opcional**, os valores de fábrica são place
 LOCAL_ASN=65000                    # ← o ASN real da sua rede
 ROUTER_ID=198.51.100.10            # ← IP do host
 DEFAULT_NEXT_HOP=192.0.2.1         # next-hop de descarte
-DEFAULT_COMMUNITIES=65535:666      # BLACKHOLE (RFC 7999)
+DEFAULT_COMMUNITIES=65535:666      # BLACKHOLE (RFC 7999) — ver o aviso abaixo
 PROTECTED_PREFIXES=203.0.113.0/24,198.51.100.0/24   # ← seus blocos e dos clientes
 ```
+
+> [!IMPORTANT]
+> **ASN de 4 bytes (> 65535) não cabe em community normal**, que é 16:16 bits.
+> `65536:666` é inválido: use a large community `65536:0:666` (RFC 8092) ou a
+> `65535:666`. Com valor inválido o backend recusa anunciar e mostra o motivo no
+> Dashboard, em vez de deixar o RIB vazio.
 
 > [!CAUTION]
 > **Preencha o `PROTECTED_PREFIXES`.** É a única coisa que impede alguém de
@@ -751,7 +756,8 @@ cp data/backup.db /lugar/seguro/
 | Login sempre falha, sem erro no log | `$` do hash bcrypt não escapado como `$$` no `.env` | reescreva o `.env`, `docker compose up -d backend` |
 | Sessão não sai de `ACTIVE` | firewall na 179, IP do peer errado, ou senha MD5 divergente | `adj-in` vazio + `docker compose logs gobgpd` |
 | `Received > 0` e `Accepted = 0` | **é o comportamento correto** — o reject-all funcionando | nada |
-| Dashboard: banco 7.719, RIB 0 | gobgpd reiniciou e o watchdog ainda não acordou | **Sincronizar RIB** ou espere 60s |
+| Dashboard: banco 7.719, RIB 0, sem erro | gobgpd reiniciou e o watchdog ainda não reinjetou | o watchdog detecta o restart em ~5s; **Sincronizar RIB** força |
+| Dashboard: RIB 0 com `configuracao invalida no .env` | `DEFAULT_COMMUNITIES`, `LOCAL_ASN`, `ROUTER_ID` ou `DEFAULT_NEXT_HOP` inválido (ex.: `65536:666`) | corrija o `.env`, `docker compose up -d backend` |
 | Badge vermelho no import reject-all | política caiu do gobgpd | **Sincronizar RIB** reaplica |
 | Import recusa tudo | `PROTECTED_PREFIXES` largo demais, ou `MIN_PREFIX_LEN_V4` restritivo | o dry-run mostra o motivo linha a linha |
 | Peer aparece como "órfão" | existe no gobgpd mas não no banco | o próximo reconcile remove |
@@ -797,7 +803,7 @@ flowchart TB
 | Variável | Padrão | O quê |
 |---|---|---|
 | `ADMIN_USER` | `hexanetworks` | usuário do login |
-| `ADMIN_PASSWORD_HASH` | — | bcrypt do `gen-secrets.sh`. **Escape `$` → `$$`** |
+| `ADMIN_PASSWORD_HASH` | — | bcrypt do `gen-secrets.sh` (já sai com `$` → `$$`) |
 | `JWT_SECRET` | — | 32 bytes aleatórios do `gen-secrets.sh` |
 | `COOKIE_SECURE` | `false` | `true` quando estiver atrás de TLS |
 | `LOCAL_ASN` | `65000` | **ASN do controller — ajuste** |
@@ -806,7 +812,7 @@ flowchart TB
 | `GOBGP_VERSION` | `v4.7.0` | tag compilada no build |
 | `GRPC_LISTEN` | `127.0.0.1:50051` | não mude pra `0.0.0.0` sem firewall |
 | `DEFAULT_NEXT_HOP` | `192.0.2.1` | next-hop anunciado |
-| `DEFAULT_COMMUNITIES` | `65535:666` | BLACKHOLE (RFC 7999) |
+| `DEFAULT_COMMUNITIES` | `65535:666` | BLACKHOLE (RFC 7999). ASN de 4 bytes: `ASN:0:666` |
 | `PROTECTED_PREFIXES` | *(vazio)* | **CSV dos blocos que nunca podem ser anunciados** |
 | `MAX_ROUTES` | `50000` | teto global |
 | `MIN_PREFIX_LEN_V4` | `24` | recusa prefixo mais curto |

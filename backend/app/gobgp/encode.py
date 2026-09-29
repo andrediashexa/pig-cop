@@ -9,6 +9,8 @@ import ipaddress
 
 from api import attribute_pb2, common_pb2, gobgp_pb2, nlri_pb2
 
+from ..config import community_problem
+
 ORIGIN_IGP = 0
 
 FAMILY_IPV4 = common_pb2.Family(
@@ -34,13 +36,19 @@ def int_to_community(value: int) -> str:
 
 
 def split_communities(csv: str | None) -> tuple[list[int], list[tuple[int, int, int]]]:
-    """Separa communities normais (32 bits) de large communities."""
+    """Separa communities normais (32 bits) de large communities.
+
+    Levanta ValueError com o motivo legivel se alguma nao couber no UPDATE.
+    """
     normal: list[int] = []
     large: list[tuple[int, int, int]] = []
     for item in (csv or "").split(","):
         item = item.strip()
         if not item:
             continue
+        problem = community_problem(item)
+        if problem:
+            raise ValueError(problem)
         parts = item.split(":")
         if len(parts) == 2:
             normal.append(community_to_int(item))

@@ -6,12 +6,8 @@ Toda rota passa por aqui antes de ir para o banco ou para o RIB.
 from __future__ import annotations
 
 import ipaddress
-import re
 
-from .config import get_settings
-
-COMMUNITY_RE = re.compile(r"^(\d{1,5}):(\d{1,5})$")
-LARGE_COMMUNITY_RE = re.compile(r"^(\d{1,10}):(\d{1,10}):(\d{1,10})$")
+from .config import community_problem, get_settings
 
 
 class RouteRejected(ValueError):
@@ -82,15 +78,9 @@ def validate_communities(raw: str | None) -> str | None:
     if not items:
         return None
     for c in items:
-        if COMMUNITY_RE.match(c):
-            a, b = c.split(":")
-            if int(a) > 65535 or int(b) > 65535:
-                raise RouteRejected(f"community fora do range: {c}")
-        elif LARGE_COMMUNITY_RE.match(c):
-            if any(int(p) > 4294967295 for p in c.split(":")):
-                raise RouteRejected(f"large community fora do range: {c}")
-        else:
-            raise RouteRejected(f"community invalida: {c} (use 65535:666 ou 65000:1:2)")
+        problem = community_problem(c)
+        if problem:
+            raise RouteRejected(problem)
     return ",".join(items)
 
 

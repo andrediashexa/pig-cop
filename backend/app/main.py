@@ -35,6 +35,10 @@ async def lifespan(app: FastAPI):
              settings.router_id)
     if not settings.jwt_secret or not settings.admin_password_hash:
         log.error("JWT_SECRET/ADMIN_PASSWORD_HASH ausentes: o login vai falhar")
+    for err in settings.config_errors():
+        log.error("configuracao invalida, nenhuma rota vai ser anunciada: %s", err)
+    for bad in settings.invalid_protected_prefixes():
+        log.error("PROTECTED_PREFIXES: %r nao e um prefixo valido e NAO esta protegido", bad)
     _loop = ReconcileLoop()
     _loop.start()
     yield

@@ -19,15 +19,22 @@ router = APIRouter(tags=["system"])
 
 @router.get("/health")
 def health():
-    """Liveness publico: nao expoe nada sensivel."""
-    gobgp_ok, detail = True, None
+    """Liveness publico: nao expoe nada sensivel.
+
+    gobgp = o gRPC responde; bgp = o BGP global esta de fato iniciado (com
+    LOCAL_ASN invalido o gRPC responde mas o BGP nunca sobe).
+    """
+    settings = get_settings()
+    gobgp_ok, bgp_ok, detail = True, False, None
     try:
-        get_client().get_bgp(timeout=2.0)
+        bgp_ok = get_client().get_bgp(timeout=2.0) is not None
     except GoBGPError as exc:
         gobgp_ok, detail = False, str(exc)
-    status_code = "ok" if gobgp_ok else "degraded"
-    return {"status": status_code, "gobgp": gobgp_ok, "detail": detail,
-            "version": get_settings().app_version}
+    config_errors = settings.config_errors()
+    ok = gobgp_ok and bgp_ok and not config_errors
+    return {"status": "ok" if ok else "degraded", "gobgp": gobgp_ok, "bgp": bgp_ok,
+            "config_errors": config_errors, "detail": detail,
+            "version": settings.app_version}
 
 
 @router.get("/stats")
@@ -52,7 +59,11 @@ def stats(user: str = RequireUser):
         bgp = client.get_bgp()
         peers_live = client.list_peers()
         established = sum(1 for p in peers_live if p["session_state"] == "established")
+        # O card compara com rotas.ativas, que conta IPv4 + IPv6: com so a
+        # tabela IPv4 aqui, cada rota IPv6 aparecia como "diferenca com o banco".
         rib = client.table_stats("ipv4")
+        v6 = client.table_stats("ipv6")
+        rib = {k: rib[k] + v6[k] for k in rib}
         import_policy = client.import_policy_state()
     except GoBGPError as exc:
         erro = str(exc)
