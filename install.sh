@@ -355,11 +355,20 @@ else
   if [ "$LOCAL_ASN" -gt 65535 ] && [ "$COMMUNITIES" = "65535:666" ]; then
     info "ASN de 4 bytes: community própria tem que ser large (ex.: $LOCAL_ASN:0:666)"
   fi
+  # O padrão oferecido é sempre um valor válido. Antes, a resposta inválida
+  # virava o padrão da pergunta seguinte: Enter repetia o erro para sempre.
+  COMM_DEFAULT="$COMMUNITIES"
+  if ! problem="$(check_communities "$COMM_DEFAULT")"; then
+    [ "$INTERACTIVE" -eq 1 ] || die "$problem"
+    warn "$problem"
+    COMM_DEFAULT="65535:666"
+  fi
   while :; do
-    ask COMMUNITIES "communities padrão"                   "$COMMUNITIES"
+    ask COMMUNITIES "communities padrão"                   "$COMM_DEFAULT"
     problem="$(check_communities "$COMMUNITIES")" && break
     [ "$INTERACTIVE" -eq 1 ] || die "$problem"
     warn "$problem"
+    info "digite outra, ou Enter para usar $COMM_DEFAULT"
   done
   ask ADMIN_USER  "usuário do login web"                   "$ADMIN_USER"
 
