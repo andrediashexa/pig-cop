@@ -149,7 +149,7 @@ def test_ja_existe_nao_engole_erro_real():
 
 # ── regressao: community com ASN de 4 bytes no DEFAULT_COMMUNITIES ───────────
 #
-# Um provedor com ASN 65536 configurou DEFAULT_COMMUNITIES=65536:666. Nada
+# Um provedor com ASN de 4 bytes configurou DEFAULT_COMMUNITIES=65536:666. Nada
 # validava o .env: cada injecao estourava o uint32 do protobuf, o RIB ficava
 # vazio e a UI so mostrava "Value out of range: 4294967962" (= 65536<<16|666).
 
