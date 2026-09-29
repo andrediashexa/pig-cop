@@ -83,6 +83,7 @@ faltam.
 - [Configurando um cliente](#configurando-um-cliente)
 - [As telas](#as-telas)
 - [API](#api)
+- [Atualização](#atualização)
 - [Operação e troubleshooting](#operação-e-troubleshooting)
 - [Segurança](#segurança)
 - [Referência do `.env`](#referência-do-env)
@@ -722,6 +723,29 @@ $ docker exec pigcop-gobgpd gobgp --host 127.0.0.1 global rib 45.128.10.7/32 -a 
 
 ---
 
+## Atualização
+
+```bash
+cd /opt/pigcop
+sudo ./scripts/update.sh
+```
+
+Puxa a versão nova (`git pull --ff-only`), rebuilda **só as imagens que mudaram**
+e sobe de novo. O `.env` e o banco (`data/`) não são tocados. No fim ele confere o
+`/api/health` e avisa se o `.env` tem algo que impede anunciar (community
+inválida, ASN fora do range etc).
+
+- Se o `gobgpd` mudou, as sessões BGP caem e voltam; o controller detecta o
+  restart e reinjeta as rotas em ~10s.
+- Arquivo do projeto alterado localmente faz o script parar antes do pull.
+- Já deu `git pull` na mão? `sudo ./scripts/update.sh --rebuild` rebuilda tudo.
+
+> [!NOTE]
+> Instalação anterior ao `scripts/update.sh`: a primeira vez é
+> `sudo git pull && sudo ./scripts/update.sh --rebuild`.
+
+---
+
 ## Operação e troubleshooting
 
 ```bash
@@ -830,6 +854,7 @@ pig-cop/
 ├── .env.example                 # copie para .env
 ├── rotas.rsc                    # dataset semente: 7.719 IPs de C2
 ├── scripts/gen-secrets.sh       # gera hash bcrypt + JWT_SECRET
+├── scripts/update.sh            # git pull + rebuild do que mudou
 │
 ├── gobgpd/Dockerfile            # compila GoBGP na tag pinada
 │
