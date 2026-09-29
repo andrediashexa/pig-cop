@@ -10,31 +10,68 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _COMMUNITY_RE = re.compile(r"^(\d+):(\d+)$")
 _LARGE_COMMUNITY_RE = re.compile(r"^(\d+):(\d+):(\d+)$")
+_EXT_COMMUNITY_RE = re.compile(r"^(rt|soo):(\d+):(\d+)$", re.IGNORECASE)
 _U16, _U32 = 65535, 4294967295
+
+# Subtipos das extended communities AS-specific (RFC 4360 / RFC 5668).
+EXT_SUBTYPES = {"rt": 0x02, "soo": 0x03}
+FORMATOS = "65535:666 (standard), 65000:0:666 (large), rt:65000:666 ou soo:65000:666 (extended)"
+
+
+def parse_community(item: str) -> tuple:
+    """Interpreta uma community do CSV. Levanta ValueError com o motivo.
+
+    Retorna um de:
+      ("standard", valor32)                      65535:666        RFC 1997
+      ("large", (global, local1, local2))        65536:0:666      RFC 8092
+      ("extended", "rt"|"soo", asn, local)       rt:65536:666     RFC 4360/5668
+
+    ASN:N com ASN de 4 bytes nao cabe numa standard (16:16 bits); nessa
+    notacao ele e a extended community route-target 4-octet AS-specific -
+    e o que roteadores entendem por "ext-community ASN:N". Antes isso
+    estourava o uint32 do protobuf e o GoBGP so dizia "Value out of range".
+    """
+    item = item.strip()
+    m = _EXT_COMMUNITY_RE.match(item)
+    if m:
+        kind, asn, local = m.group(1).lower(), int(m.group(2)), int(m.group(3))
+    else:
+        m = _COMMUNITY_RE.match(item)
+        if m:
+            asn, local = int(m.group(1)), int(m.group(2))
+            if asn <= _U16 and local <= _U16:
+                return ("standard", (asn << 16) | local)
+            if asn <= _U16:
+                raise ValueError(f"{item}: community fora do range (cada parte vai de 0 a 65535)")
+            kind = "rt"
+        else:
+            m = _LARGE_COMMUNITY_RE.match(item)
+            if not m:
+                raise ValueError(f"{item}: community invalida (use {FORMATOS})")
+            parts = tuple(int(p) for p in m.groups())
+            if any(p > _U32 for p in parts):
+                raise ValueError(f"{item}: large community fora do range (cada parte vai de 0 a {_U32})")
+            return ("large", parts)
+
+    # extended AS-specific: 2 bytes de ASN + 4 de valor, ou 4 de ASN + 2 de valor
+    if asn > _U32:
+        raise ValueError(f"{item}: ASN {asn} fora do range (maximo {_U32})")
+    if asn > _U16 and local > _U16:
+        raise ValueError(
+            f"{item}: em extended community com ASN de 4 bytes o valor vai de 0 a 65535; "
+            f"para valor maior use a large community {asn}:0:{local}")
+    if local > _U32:
+        raise ValueError(f"{item}: valor fora do range (maximo {_U32})")
+    return ("extended", kind, asn, local)
 
 
 def community_problem(item: str) -> str | None:
-    """Motivo pelo qual a community nao pode ir no UPDATE, ou None se ok.
-
-    Standard (RFC 1997) e 16:16 bits. ASN de 4 bytes nao cabe na metade de
-    cima - sem esta checagem o valor estoura o uint32 do protobuf e o GoBGP
-    devolve so "Value out of range: <numero>", sem dizer de onde veio.
-    """
-    m = _COMMUNITY_RE.match(item)
-    if m:
-        a, b = int(m.group(1)), int(m.group(2))
-        if a > _U16 and a <= _U32 and b <= _U32:
-            return (f"{item}: community normal e 16:16 bits e {a} e ASN de 4 bytes; "
-                    f"use a large community {a}:0:{b} (RFC 8092) ou 65535:666 (BLACKHOLE)")
-        if a > _U16 or b > _U16:
-            return f"{item}: community fora do range (cada parte vai de 0 a 65535)"
-        return None
-    m = _LARGE_COMMUNITY_RE.match(item)
-    if m:
-        if any(int(p) > _U32 for p in m.groups()):
-            return f"{item}: large community fora do range (cada parte vai de 0 a {_U32})"
-        return None
-    return f"{item}: community invalida (use 65535:666 ou 65000:1:2)"
+    """Motivo pelo qual a community nao pode ir no UPDATE, ou None se ok."""
+    try:
+        parse_community(item)
+    except ValueError as exc:
+        return str(exc)
+    return None
 
 
 class Settings(BaseSettings):

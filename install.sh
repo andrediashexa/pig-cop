@@ -39,23 +39,31 @@ is_ipv4() {
 is_ip() { is_ipv4 "$1" || [[ "$1" =~ ^[0-9A-Fa-f:.]+$ && "$1" == *:* ]]; }
 is_asn() { [[ "$1" =~ ^[0-9]{1,10}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 4294967295 ]; }
 
-# Imprime o problema da community (vazio = ok). Standard é 16:16 bits: ASN de
-# 4 bytes não cabe, e o erro só aparecia depois, na UI, como "Value out of range".
+# Imprime o problema da community (vazio = ok). Mesmas regras de
+# parse_community() em backend/app/config.py:
+#   65535:666      standard (16:16 bits)
+#   65536:0:666    large (RFC 8092)
+#   65536:666      ASN de 4 bytes = extended community route-target (RFC 5668)
+#   rt:A:N / soo:A:N  extended explícita
 community_problem() {
-  local c="$1" a b
-  if [[ "$c" =~ ^([0-9]{1,10}):([0-9]{1,10})$ ]]; then
-    a="${BASH_REMATCH[1]}"; b="${BASH_REMATCH[2]}"
-    if [ "$a" -gt 65535 ] && [ "$a" -le 4294967295 ]; then
-      echo "$c: $a é ASN de 4 bytes e não cabe numa community normal (16:16 bits). Use a large community $a:0:$b ou 65535:666 (BLACKHOLE)"
-    elif [ "$a" -gt 65535 ] || [ "$b" -gt 65535 ]; then
+  local c="$1" a b p
+  if [[ "${c,,}" =~ ^(rt|soo):([0-9]{1,10}):([0-9]{1,10})$ ]] || [[ "$c" =~ ^()([0-9]{1,10}):([0-9]{1,10})$ ]]; then
+    a="${BASH_REMATCH[2]}"; b="${BASH_REMATCH[3]}"
+    if [ "$a" -gt 4294967295 ]; then
+      echo "$c: ASN fora do range"
+    elif [ "$a" -gt 65535 ] && [ "$b" -gt 65535 ]; then
+      echo "$c: em extended community com ASN de 4 bytes o valor vai de 0 a 65535; para valor maior use a large community $a:0:$b"
+    elif [ -z "${BASH_REMATCH[1]}" ] && [ "$a" -le 65535 ] && [ "$b" -gt 65535 ]; then
       echo "$c: fora do range (cada parte vai de 0 a 65535)"
+    elif [ "$b" -gt 4294967295 ]; then
+      echo "$c: valor fora do range"
     fi
   elif [[ "$c" =~ ^([0-9]{1,10}):([0-9]{1,10}):([0-9]{1,10})$ ]]; then
-    for a in "${BASH_REMATCH[@]:1}"; do
-      [ "$a" -le 4294967295 ] || { echo "$c: large community fora do range"; return; }
+    for p in "${BASH_REMATCH[@]:1}"; do
+      [ "$p" -le 4294967295 ] || { echo "$c: large community fora do range"; return; }
     done
   else
-    echo "$c: formato inválido (use 65535:666 ou ASN:0:666)"
+    echo "$c: formato inválido (use 65535:666, ASN:0:666, ou rt:ASN:666 para extended)"
   fi
 }
 check_communities() {
@@ -353,7 +361,7 @@ else
   ask NEXT_HOP    "next-hop de descarte a anunciar"        "$NEXT_HOP"
   is_ip "$NEXT_HOP" || die "next-hop inválido: $NEXT_HOP"
   if [ "$LOCAL_ASN" -gt 65535 ] && [ "$COMMUNITIES" = "65535:666" ]; then
-    info "ASN de 4 bytes: community própria tem que ser large (ex.: $LOCAL_ASN:0:666)"
+    info "ASN de 4 bytes: $LOCAL_ASN:666 vai como extended community (route-target); large: $LOCAL_ASN:0:666"
   fi
   # O padrão oferecido é sempre um valor válido. Antes, a resposta inválida
   # virava o padrão da pergunta seguinte: Enter repetia o erro para sempre.
@@ -369,6 +377,13 @@ else
     [ "$INTERACTIVE" -eq 1 ] || die "$problem"
     warn "$problem"
     info "digite outra, ou Enter para usar $COMM_DEFAULT"
+  done
+  IFS=, read -ra _items <<< "$COMMUNITIES"
+  for item in "${_items[@]}"; do
+    item="${item// /}"
+    if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]] && [ "${BASH_REMATCH[1]}" -gt 65535 ]; then
+      info "$item vai como extended community route-target (rt:$item); se o filtro do outro lado for soo, use soo:$item"
+    fi
   done
   ask ADMIN_USER  "usuário do login web"                   "$ADMIN_USER"
 

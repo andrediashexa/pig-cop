@@ -149,35 +149,64 @@ def test_ja_existe_nao_engole_erro_real():
 
 # ── regressao: community com ASN de 4 bytes no DEFAULT_COMMUNITIES ───────────
 #
-# Um provedor com ASN de 4 bytes configurou DEFAULT_COMMUNITIES=65536:666. Nada
-# validava o .env: cada injecao estourava o uint32 do protobuf, o RIB ficava
-# vazio e a UI so mostrava "Value out of range: 4294967962" (= 65536<<16|666).
+# Um provedor com ASN de 4 bytes configurou DEFAULT_COMMUNITIES=65536:666. O
+# encoder tratava tudo que era ASN:N como standard (16:16 bits): cada injecao
+# estourava o uint32 do protobuf, o RIB ficava vazio e a UI so mostrava
+# "Value out of range: 4294967962" (= 65536<<16|666). ASN:N com ASN de 4 bytes
+# e a extended community route-target 4-octet AS-specific (RFC 5668).
 
-def test_community_asn_4_bytes_sugere_large():
+def test_parse_community_tipos():
+    from app.config import parse_community
+
+    assert parse_community("65535:666") == ("standard", (65535 << 16) | 666)
+    assert parse_community("65536:0:666") == ("large", (65536, 0, 666))
+    assert parse_community("65536:666") == ("extended", "rt", 65536, 666)
+    assert parse_community("RT:65536:666") == ("extended", "rt", 65536, 666)
+    assert parse_community("soo:65536:666") == ("extended", "soo", 65536, 666)
+    assert parse_community("rt:65000:100000") == ("extended", "rt", 65000, 100000)
+
+
+def test_community_invalida_explica():
     from app.config import community_problem
 
-    problem = community_problem("65536:666")
-    assert problem and "65536:0:666" in problem
-    assert community_problem("65535:666") is None
-    assert community_problem("65536:0:666") is None
+    # 4-octet AS-specific so tem 16 bits de valor: sugere a large
+    assert "65536:0:70000" in community_problem("65536:70000")
+    assert "0 a 65535" in community_problem("65535:99999")
+    assert community_problem("4294967296:1")
+    assert community_problem("abc")
     try:
-        validate_communities("65536:666")
-        raise AssertionError("deveria rejeitar ASN de 4 bytes em community normal")
+        validate_communities("65536:70000")
+        raise AssertionError("deveria rejeitar")
     except RouteRejected as exc:
-        assert "65536:0:666" in str(exc)
+        assert "65536:0:70000" in str(exc)
+
+
+def test_build_path_extended_community():
+    from app.gobgp.encode import build_path, decode_path
+
+    path = build_path("1.2.3.4/32", 32, "ipv4", "192.0.2.1", "65535:666,65536:666,soo:65000:7")
+    attrs = {a.WhichOneof("attr"): a for a in path.pattrs}
+    assert list(attrs["communities"].communities.communities) == [(65535 << 16) | 666]
+    ext = attrs["extended_communities"].extended_communities.communities
+    rt = ext[0].four_octet_as_specific
+    assert (rt.is_transitive, rt.sub_type, rt.asn, rt.local_admin) == (True, 0x02, 65536, 666)
+    soo = ext[1].two_octet_as_specific
+    assert (soo.sub_type, soo.asn, soo.local_admin) == (0x03, 65000, 7)
+    assert decode_path(path)["communities"] == ["65535:666", "rt:65536:666", "soo:65000:7"]
 
 
 def test_config_errors_do_env():
     from app.config import Settings
 
-    ok = Settings(local_asn=65536, router_id="192.0.2.10",
-                  default_next_hop="192.0.2.1", default_communities="65536:0:666")
-    assert ok.config_errors() == []
+    for comm in ("65536:0:666", "65536:666", "rt:65536:666"):
+        ok = Settings(local_asn=65536, router_id="192.0.2.10",
+                      default_next_hop="192.0.2.1", default_communities=comm)
+        assert ok.config_errors() == [], comm
 
     ruim = Settings(local_asn=99999999999, router_id="", default_next_hop="x",
-                    default_communities="65536:666")
+                    default_communities="65536:70000")
     erros = " | ".join(ruim.config_errors())
-    for trecho in ("LOCAL_ASN", "ROUTER_ID", "DEFAULT_NEXT_HOP", "65536:0:666"):
+    for trecho in ("LOCAL_ASN", "ROUTER_ID", "DEFAULT_NEXT_HOP", "65536:0:70000"):
         assert trecho in erros, trecho
 
 
@@ -185,10 +214,10 @@ def test_build_path_explica_community_invalida():
     from app.gobgp.client import GoBGPError, _build_path
 
     try:
-        _build_path("1.2.3.4/32", 32, "ipv4", "192.0.2.1", "65536:666")
+        _build_path("1.2.3.4/32", 32, "ipv4", "192.0.2.1", "65536:70000")
         raise AssertionError("deveria recusar")
     except GoBGPError as exc:
-        assert "1.2.3.4/32" in str(exc) and "65536:0:666" in str(exc)
+        assert "1.2.3.4/32" in str(exc) and "65536:0:70000" in str(exc)
         assert "Value out of range" not in str(exc)
 
 

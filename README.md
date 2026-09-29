@@ -243,10 +243,18 @@ PROTECTED_PREFIXES=203.0.113.0/24,198.51.100.0/24   # ← seus blocos e dos clie
 ```
 
 > [!IMPORTANT]
-> **ASN de 4 bytes (> 65535) não cabe em community normal**, que é 16:16 bits.
-> `65536:666` é inválido: use a large community `65536:0:666` (RFC 8092) ou a
-> `65535:666`. Com valor inválido o backend recusa anunciar e mostra o motivo no
-> Dashboard, em vez de deixar o RIB vazio.
+> **Formatos de community aceitos** (no `.env` e por rota):
+>
+> | Escrita | Vai no UPDATE como |
+> |---|---|
+> | `65535:666` | standard (RFC 1997, 16:16 bits) |
+> | `65536:0:666` | large community (RFC 8092) |
+> | `65536:666` | ASN de 4 bytes não cabe em standard: vira **extended route-target** `rt:65536:666` (RFC 5668) |
+> | `rt:65536:666` / `soo:65536:666` | extended community explícita, route-target ou route-origin |
+>
+> Use o tipo que o filtro do roteador do outro lado espera. Valor inválido faz o
+> backend recusar anunciar e mostrar o motivo no Dashboard, em vez de deixar o
+> RIB vazio.
 
 > [!CAUTION]
 > **Preencha o `PROTECTED_PREFIXES`.** É a única coisa que impede alguém de
@@ -781,7 +789,7 @@ cp data/backup.db /lugar/seguro/
 | Sessão não sai de `ACTIVE` | firewall na 179, IP do peer errado, ou senha MD5 divergente | `adj-in` vazio + `docker compose logs gobgpd` |
 | `Received > 0` e `Accepted = 0` | **é o comportamento correto** — o reject-all funcionando | nada |
 | Dashboard: banco 7.719, RIB 0, sem erro | gobgpd reiniciou e o watchdog ainda não reinjetou | o watchdog detecta o restart em ~5s; **Sincronizar RIB** força |
-| Dashboard: RIB 0 com `configuracao invalida no .env` | `DEFAULT_COMMUNITIES`, `LOCAL_ASN`, `ROUTER_ID` ou `DEFAULT_NEXT_HOP` inválido (ex.: `65536:666`) | corrija o `.env`, `docker compose up -d backend` |
+| Dashboard: RIB 0 com `configuracao invalida no .env` | `DEFAULT_COMMUNITIES`, `LOCAL_ASN`, `ROUTER_ID` ou `DEFAULT_NEXT_HOP` inválido (ex.: `65536:70000`) | corrija o `.env`, `docker compose up -d backend` |
 | Badge vermelho no import reject-all | política caiu do gobgpd | **Sincronizar RIB** reaplica |
 | Import recusa tudo | `PROTECTED_PREFIXES` largo demais, ou `MIN_PREFIX_LEN_V4` restritivo | o dry-run mostra o motivo linha a linha |
 | Peer aparece como "órfão" | existe no gobgpd mas não no banco | o próximo reconcile remove |
@@ -836,7 +844,7 @@ flowchart TB
 | `GOBGP_VERSION` | `v4.7.0` | tag compilada no build |
 | `GRPC_LISTEN` | `127.0.0.1:50051` | não mude pra `0.0.0.0` sem firewall |
 | `DEFAULT_NEXT_HOP` | `192.0.2.1` | next-hop anunciado |
-| `DEFAULT_COMMUNITIES` | `65535:666` | BLACKHOLE (RFC 7999). ASN de 4 bytes: `ASN:0:666` |
+| `DEFAULT_COMMUNITIES` | `65535:666` | BLACKHOLE (RFC 7999). Aceita standard, large (`A:0:N`) e extended (`rt:A:N`, `soo:A:N`; `A:N` com ASN de 4 bytes = `rt`) |
 | `PROTECTED_PREFIXES` | *(vazio)* | **CSV dos blocos que nunca podem ser anunciados** |
 | `MAX_ROUTES` | `50000` | teto global |
 | `MIN_PREFIX_LEN_V4` | `24` | recusa prefixo mais curto |

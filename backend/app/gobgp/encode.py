@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import ipaddress
 
-from api import attribute_pb2, common_pb2, gobgp_pb2, nlri_pb2
+from api import attribute_pb2, common_pb2, extcom_pb2, gobgp_pb2, nlri_pb2
 
-from ..config import community_problem
+from ..config import EXT_SUBTYPES, parse_community
 
 ORIGIN_IGP = 0
 
@@ -25,36 +25,41 @@ def family_for(family: str) -> common_pb2.Family:
     return FAMILY_IPV6 if family == "ipv6" else FAMILY_IPV4
 
 
-def community_to_int(community: str) -> int:
-    """'65535:666' -> 0xFFFF029A."""
-    asn, value = community.split(":")
-    return (int(asn) << 16) | int(value)
-
-
 def int_to_community(value: int) -> str:
     return f"{(value >> 16) & 0xFFFF}:{value & 0xFFFF}"
 
 
-def split_communities(csv: str | None) -> tuple[list[int], list[tuple[int, int, int]]]:
-    """Separa communities normais (32 bits) de large communities.
+def split_communities(csv: str | None) -> tuple[list[int], list[tuple[int, int, int]], list]:
+    """Separa standard (32 bits), large e extended communities.
 
     Levanta ValueError com o motivo legivel se alguma nao couber no UPDATE.
     """
     normal: list[int] = []
     large: list[tuple[int, int, int]] = []
+    extended: list = []
     for item in (csv or "").split(","):
         item = item.strip()
         if not item:
             continue
-        problem = community_problem(item)
-        if problem:
-            raise ValueError(problem)
-        parts = item.split(":")
-        if len(parts) == 2:
-            normal.append(community_to_int(item))
-        elif len(parts) == 3:
-            large.append((int(parts[0]), int(parts[1]), int(parts[2])))
-    return normal, large
+        parsed = parse_community(item)
+        if parsed[0] == "standard":
+            normal.append(parsed[1])
+        elif parsed[0] == "large":
+            large.append(parsed[1])
+        else:
+            extended.append(_extended(*parsed[1:]))
+    return normal, large, extended
+
+
+def _extended(kind: str, asn: int, local: int) -> extcom_pb2.ExtendedCommunity:
+    """rt/soo AS-specific transitiva; 4-octet quando o ASN nao cabe em 2 bytes."""
+    if asn > 0xFFFF:
+        return extcom_pb2.ExtendedCommunity(
+            four_octet_as_specific=extcom_pb2.FourOctetAsSpecificExtended(
+                is_transitive=True, sub_type=EXT_SUBTYPES[kind], asn=asn, local_admin=local))
+    return extcom_pb2.ExtendedCommunity(
+        two_octet_as_specific=extcom_pb2.TwoOctetAsSpecificExtended(
+            is_transitive=True, sub_type=EXT_SUBTYPES[kind], asn=asn, local_admin=local))
 
 
 def build_path(prefix: str, prefix_len: int, family: str, next_hop: str,
@@ -88,7 +93,7 @@ def build_path(prefix: str, prefix_len: int, family: str, next_hop: str,
             )
         )
 
-    normal, large = split_communities(communities)
+    normal, large, extended = split_communities(communities)
     if normal:
         attrs.append(
             attribute_pb2.Attribute(
@@ -105,6 +110,15 @@ def build_path(prefix: str, prefix_len: int, family: str, next_hop: str,
                         )
                         for g, l1, l2 in large
                     ]
+                )
+            )
+        )
+
+    if extended:
+        attrs.append(
+            attribute_pb2.Attribute(
+                extended_communities=attribute_pb2.ExtendedCommunitiesAttribute(
+                    communities=extended
                 )
             )
         )
@@ -146,6 +160,13 @@ def decode_path(path: gobgp_pb2.Path) -> dict:
                 f"{c.global_admin}:{c.local_data1}:{c.local_data2}"
                 for c in attr.large_communities.communities
             ]
+        elif which == "extended_communities":
+            for ec in attr.extended_communities.communities:
+                kind = ec.WhichOneof("extcom")
+                if kind in ("four_octet_as_specific", "two_octet_as_specific"):
+                    v = getattr(ec, kind)
+                    name = {0x02: "rt", 0x03: "soo"}.get(v.sub_type, f"ext{v.sub_type}")
+                    out["communities"].append(f"{name}:{v.asn}:{v.local_admin}")
         elif which == "origin":
             out["origin"] = {0: "igp", 1: "egp", 2: "incomplete"}.get(
                 attr.origin.origin, str(attr.origin.origin)
